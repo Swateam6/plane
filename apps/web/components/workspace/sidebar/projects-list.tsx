@@ -75,6 +75,7 @@ export const SidebarProjectsList = observer(function SidebarProjectsList() {
         title: t("link_copied"),
         message: t("project_link_copied_to_clipboard"),
       });
+      return undefined;
     });
   };
 
@@ -225,8 +226,8 @@ export const SidebarProjectsList = observer(function SidebarProjectsList() {
                     id="extended-project-sidebar-toggle"
                     aria-label={t(
                       isExtendedProjectSidebarOpened
-                        ? "aria_labels.app_sidebar.close_extended_sidebar"
-                        : "aria_labels.app_sidebar.open_extended_sidebar"
+                        ? "aria_labels.project_sidebar.close_extended_sidebar"
+                        : "aria_labels.project_sidebar.open_extended_sidebar"
                     )}
                   >
                     <MoreHorizontalOutline className="size-4 flex-shrink-0" />
