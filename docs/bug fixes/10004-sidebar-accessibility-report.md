@@ -5,3 +5,9 @@ Issue reproduced:
 
 Unit tests failed:
 ![img_1.png](img_1.png)
+
+Unit tests passed after fix:
+![img_2.png](img_2.png)
+
+Page shows correct label after fix:
+![img_3.png](img_3.png)
