@@ -16,3 +16,18 @@ This is to demonstrate that activities are not grouped together.
 ![8967-group-issues-4.png](8967-group-issues-4.png)
 
 ![8967-group-issues-5.png](8967-group-issues-5.png)
+
+After feature implementation, continuous entries shrunk
+![8967-group-issues-6.png](8967-group-issues-6.png)
+
+After feature implementation, once continuous entry expanded
+![8967-group-issues-7.png](8967-group-issues-7.png)
+
+Test cases all passed, added some while implementing feature
+![8967-group-issues-8](8967-group-issues-8.png)
+
+![8967-group-issues-9](8967-group-issues-9.png)
+
+![8967-group-issues-10](8967-group-issues-10.png)
+
+![8967-group-issues-11.png](8967-group-issues-11.png)
