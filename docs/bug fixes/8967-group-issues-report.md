@@ -1,8 +1,8 @@
 Activity shows separate entries even for same user
-![img.png](img.png)
+![8967-group-issues-1.png](8967-group-issues-1.png)
 
 Same thing filtered and descending.
-![img_1.png](img_1.png)
+![8967-group-issues-2.png](8967-group-issues-2.png)
 
 This was reproduced by having my alternate user lacazette010
 create the workspace, add a work item, update the description,
