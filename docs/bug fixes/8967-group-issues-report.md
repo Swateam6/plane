@@ -10,3 +10,9 @@ set priority to urgent, set state to in progress, before AlbertLi2019
 changes the name, then lacazette010 updates the description, leaves
 a comment, adds a new label, and assigns themselves to the work order.
 This is to demonstrate that activities are not grouped together.
+
+![8967-group-issues-3.png](8967-group-issues-3.png)
+
+![8967-group-issues-4.png](8967-group-issues-4.png)
+
+![8967-group-issues-5.png](8967-group-issues-5.png)
