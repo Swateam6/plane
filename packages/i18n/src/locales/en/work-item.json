@@ -1,5 +1,8 @@
 {
   "issue": {
+    "activity": {
+      "multiple_changes": "{name} made {count, plural, one {# change} other {# changes}}"
+    },
     "label": "{count, plural, one {Work item} other {Work items}}",
     "all": "All Work items",
     "edit": "Edit work item",

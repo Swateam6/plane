@@ -34,3 +34,29 @@ export function groupActivityEntries(
     return { entry, isContinuation };
   });
 }
+
+export type ActivityGroup = {
+  entries: TIssueActivityComment[];
+};
+
+export function groupActivityRuns(
+  entries: readonly TIssueActivityComment[],
+  getActivityById: {
+    (id: string): ActivityIdentity | undefined;
+  }
+): ActivityGroup[] {
+  const annotatedEntries = groupActivityEntries(entries, getActivityById);
+  const groups: ActivityGroup[] = [];
+
+  for (const item of annotatedEntries) {
+    const previousGroup = groups[groups.length - 1];
+
+    if (item.isContinuation && previousGroup) {
+      previousGroup.entries.push(item.entry);
+    } else {
+      groups.push({ entries: [item.entry] });
+    }
+  }
+
+  return groups;
+}

@@ -1,5 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { observable, runInAction } from "mobx";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultActivityFilters, EActivityFilterType, E_SORT_ORDER } from "@plane/constants";
@@ -21,6 +21,11 @@ const store = vi.hoisted(() => ({
   getActivityAndCommentsByIssueId: vi.fn(),
   getActivityById: vi.fn(),
   getCommentById: vi.fn(),
+}));
+vi.mock("@plane/i18n", () => ({
+  useTranslation: () => ({
+    t: (_key: string, params: { name: string; count: number }) => `${params.name} made ${params.count} changes`,
+  }),
 }));
 vi.mock("@/hooks/store/use-issue-detail", () => ({
   useIssueDetail: () => ({ activity: store, comment: { getCommentById: store.getCommentById } }),
@@ -156,15 +161,33 @@ describe("IssueActivityCommentRoot", () => {
     expect(container.childElementCount).toBe(0);
   });
 
-  it("shows one visible contributor for consecutive updates and keeps every timestamp", () => {
+  it("starts groups collapsed and expands every original action and timestamp", async () => {
     setTimeline([update("a1"), update("a2", "Alice", "name"), update("a3")]);
     render(<IssueActivityCommentRoot {...props} />);
-    expect(visibleContributorCount("Alice")).toBe(1);
-    for (const activity of Object.values(activities)) {
-      expect(screen.getByText(`time:${activity.created_at}`)).toBeTruthy();
+    const trigger = screen.getByRole("button", { name: /Alice made 3 changes/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(/updated the description/)).toBeNull();
+    expect(screen.queryByText(/set the name to a2/)).toBeNull();
+    expect(within(trigger).getByText(`time:${activities.a3.created_at}`)).toBeTruthy();
+
+    fireEvent.click(trigger);
+    const details = await screen.findByRole("region", { name: "Alice made 3 changes" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(within(details).queryByRole("link", { name: "Alice" })).toBeNull();
+    const contributorNames = within(details).getAllByText("Alice", { exact: true });
+    expect(contributorNames).toHaveLength(3);
+    for (const name of contributorNames) {
+      expect(name.closest(".sr-only")).not.toBeNull();
     }
-    expect(screen.getAllByText(/updated the description/)).toHaveLength(2);
-    expect(screen.getByText(/set the name to a2/)).toBeTruthy();
+    for (const activity of Object.values(activities)) {
+      expect(within(details).getByText(`time:${activity.created_at}`)).toBeTruthy();
+    }
+    expect(within(details).getAllByText(/updated the description/)).toHaveLength(2);
+    expect(within(details).getByText(/set the name to a2/)).toBeTruthy();
+
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Alice made 3 changes" })).toBeNull());
   });
 
   it("repeats the contributor after a different user's update", () => {
@@ -190,7 +213,9 @@ describe("IssueActivityCommentRoot", () => {
     expect(visibleContributorCount("Alice")).toBe(2);
     rerender(<IssueActivityCommentRoot {...props} selectedFilters={[EActivityFilterType.ACTIVITY]} />);
     expect(screen.queryByRole("article")).toBeNull();
-    expect(visibleContributorCount("Alice")).toBe(1);
+    const trigger = screen.getByRole("button", { name: /Alice made 2 changes/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(/updated the description/)).toBeNull();
   });
 
   it("retains the first visible contributor after filtering updates", () => {
@@ -201,22 +226,52 @@ describe("IssueActivityCommentRoot", () => {
     expect(screen.getByText(/set the name to a2/)).toBeTruthy();
   });
 
-  it("recalculates groups and preserves timestamps in descending order", () => {
+  it("keeps descending order and the newest summary timestamp after sorting", async () => {
     setTimeline([update("b1", "Bob"), update("a1"), update("a2")]);
     const { rerender } = render(<IssueActivityCommentRoot {...props} />);
     rerender(<IssueActivityCommentRoot {...props} sortOrder={E_SORT_ORDER.DESC} />);
-    expect(screen.getAllByText(/^time:/).map((node) => node.textContent?.trim())).toEqual(
-      ["a2", "a1", "b1"].map((id) => `time:${activities[id].created_at}`)
-    );
-    expect(visibleContributorCount("Alice")).toBe(1);
+    const trigger = screen.getByRole("button", { name: /Alice made 2 changes/ });
+    expect(within(trigger).getByText(`time:${activities.a2.created_at}`)).toBeTruthy();
+    fireEvent.click(trigger);
+    const details = await screen.findByRole("region", { name: "Alice made 2 changes" });
+    expect(
+      within(details)
+        .getAllByText(/^time:/)
+        .map((node) => node.textContent?.trim())
+    ).toEqual(["a2", "a1"].map((id) => `time:${activities[id].created_at}`));
     expect(visibleContributorCount("Bob")).toBe(1);
+    expect(screen.getByText(`time:${activities.b1.created_at}`)).toBeTruthy();
   });
 
-  it("responds to observable timeline updates without a manual rerender", () => {
+  it("turns a single row into a collapsed group when observable updates arrive", async () => {
     setTimeline([update("a1")]);
     render(<IssueActivityCommentRoot {...props} />);
-    act(() => setTimeline([timeline.get()![0], update("a2")]));
-    expect(screen.getAllByText(/^time:/)).toHaveLength(2);
     expect(visibleContributorCount("Alice")).toBe(1);
+    expect(screen.queryByRole("button", { name: /made .* changes/ })).toBeNull();
+    act(() => setTimeline([timeline.get()![0], update("a2")]));
+    const trigger = screen.getByRole("button", { name: /Alice made 2 changes/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(/updated the description/)).toBeNull();
+    fireEvent.click(trigger);
+    const details = await screen.findByRole("region", { name: "Alice made 2 changes" });
+    expect(within(details).getAllByText(/^time:/)).toHaveLength(2);
+  });
+
+  it("keeps groups on either side of a comment independently expandable", async () => {
+    setTimeline([
+      update("a1"),
+      update("a2"),
+      { id: "c1", activity_type: "COMMENT" },
+      update("b1", "Bob"),
+      update("b2", "Bob"),
+    ]);
+    render(<IssueActivityCommentRoot {...props} />);
+    const aliceTrigger = screen.getByRole("button", { name: /Alice made 2 changes/ });
+    const bobTrigger = screen.getByRole("button", { name: /Bob made 2 changes/ });
+    fireEvent.click(aliceTrigger);
+    expect(await screen.findByRole("region", { name: "Alice made 2 changes" })).toBeTruthy();
+    expect(bobTrigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("region", { name: "Bob made 2 changes" })).toBeNull();
+    expect(screen.getByRole("article", { name: "Comment c1" })).toBeTruthy();
   });
 });
