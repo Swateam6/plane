@@ -4,6 +4,7 @@
  * See the LICENSE file for details.
  */
 
+import { useContext } from "react";
 import type { ReactNode } from "react";
 import { HierarchyOutline } from "@makeplane/propel/icons";
 // plane imports
@@ -14,6 +15,7 @@ import { usePlatformOS } from "@/hooks/use-platform-os";
 // local imports
 import { IssueUser } from "../";
 import { IssueCreatorDisplay } from "./issue-creator";
+import { ActivityGroupingContext } from "../../../activity-grouping-context";
 
 type TIssueActivityBlockComponent = {
   icon?: ReactNode;
@@ -25,6 +27,7 @@ type TIssueActivityBlockComponent = {
 
 export function IssueActivityBlockComponent(props: TIssueActivityBlockComponent) {
   const { icon, activityId, ends, children, customUserName } = props;
+  const isContinuation = useContext(ActivityGroupingContext);
   // hooks
   const {
     activity: { getActivityById },
@@ -33,18 +36,25 @@ export function IssueActivityBlockComponent(props: TIssueActivityBlockComponent)
   const activity = getActivityById(activityId);
   const { isMobile } = usePlatformOS();
   if (!activity) return <></>;
+  const spacingClass = isContinuation
+    ? ends === "bottom"
+      ? "pt-1"
+      : "py-1"
+    : ends === "top"
+      ? "pb-2"
+      : ends === "bottom"
+        ? "pt-2"
+        : "py-2";
   return (
-    <div
-      className={`relative flex items-center gap-3 text-caption-sm-regular ${
-        ends === "top" ? `pb-2` : ends === "bottom" ? `pt-2` : `py-2`
-      }`}
-    >
+    <div className={`relative flex items-center gap-3 text-caption-sm-regular ${spacingClass}`}>
       <div className="absolute top-0 bottom-0 left-[13px] w-px bg-layer-3" aria-hidden />
       <div className="z-[4] flex h-7 w-7 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-subtle bg-layer-2 text-secondary shadow-raised-100">
         {icon ? icon : <HierarchyOutline className="h-3.5 w-3.5" />}
       </div>
-      <div className="w-full truncate text-secondary">
-        {!activity?.field && activity?.verb === "created" ? (
+      <div className={`w-full min-w-0 truncate text-secondary ${isContinuation ? "pl-3" : ""}`}>
+        {isContinuation ? (
+          <span className="sr-only">{customUserName || activity.actor_detail?.display_name} </span>
+        ) : !activity.field && activity.verb === "created" ? (
           <IssueCreatorDisplay activityId={activityId} customUserName={customUserName} />
         ) : (
           <IssueUser activityId={activityId} customUserName={customUserName} />

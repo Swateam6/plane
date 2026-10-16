@@ -16,6 +16,8 @@ import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 // local imports
 import { IssueActivityItem } from "./activity/activity-list";
 import { IssueActivityLoader } from "./loader";
+import { groupActivityEntries } from "./activity-grouping";
+import { ActivityGroupingContext } from "./activity-grouping-context";
 
 type TIssueActivityCommentRoot = {
   workspaceSlug: string;
@@ -43,7 +45,7 @@ export const IssueActivityCommentRoot = observer(function IssueActivityCommentRo
   } = props;
   // store hooks
   const {
-    activity: { getActivityAndCommentsByIssueId },
+    activity: { getActivityAndCommentsByIssueId, getActivityById },
     comment: { getCommentById },
   } = useIssueDetail();
   // derived values
@@ -55,9 +57,11 @@ export const IssueActivityCommentRoot = observer(function IssueActivityCommentRo
 
   const filteredActivityAndComments = filterActivityOnSelectedFilters(activityAndComments, selectedFilters);
 
+  const groupedEntries = groupActivityEntries(filteredActivityAndComments, getActivityById);
+
   return (
     <div>
-      {filteredActivityAndComments.map((activityComment, index) => {
+      {groupedEntries.map(({ entry: activityComment, isContinuation }, index) => {
         const comment = getCommentById(activityComment.id);
         return activityComment.activity_type === "COMMENT" ? (
           <CommentCard
@@ -74,11 +78,12 @@ export const IssueActivityCommentRoot = observer(function IssueActivityCommentRo
             enableReplies
           />
         ) : BASE_ACTIVITY_FILTER_TYPES.includes(activityComment.activity_type as EActivityFilterType) ? (
-          <IssueActivityItem
-            key={activityComment.id}
-            activityId={activityComment.id}
-            ends={index === 0 ? "top" : index === filteredActivityAndComments.length - 1 ? "bottom" : undefined}
-          />
+          <ActivityGroupingContext.Provider key={activityComment.id} value={isContinuation}>
+            <IssueActivityItem
+              activityId={activityComment.id}
+              ends={index === 0 ? "top" : index === groupedEntries.length - 1 ? "bottom" : undefined}
+            />
+          </ActivityGroupingContext.Provider>
         ) : null;
       })}
     </div>
