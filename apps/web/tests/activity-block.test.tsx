@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IssueActivityBlockComponent } from "@/components/issues/issue-detail/issue-activity/activity/actions/helpers/activity-block";
+import { ActivityGroupingContext } from "@/components/issues/issue-detail/issue-activity/activity-grouping-context";
 
 const store = vi.hoisted(() => ({ getActivityById: vi.fn(), isMobile: false }));
 vi.mock("@/hooks/store/use-issue-detail", () => ({ useIssueDetail: () => ({ activity: store }) }));
@@ -114,5 +115,27 @@ describe("IssueActivityBlockComponent regression", () => {
       </IssueActivityBlockComponent>
     );
     expect(container.childElementCount).toBe(0);
+  });
+
+  it("visually hides repeated attribution and indents continuation rows", () => {
+    render(
+      <ActivityGroupingContext.Provider value={true}>
+        <IssueActivityBlockComponent activityId="a1" ends={undefined}>
+          updated the description
+        </IssueActivityBlockComponent>
+      </ActivityGroupingContext.Provider>
+    );
+
+    expect(screen.getByText("Alice").closest(".sr-only")).not.toBeNull();
+
+    expect(screen.queryByRole("link", { name: "Alice" })).toBeNull();
+
+    const action = screen.getByText(/updated the description/);
+
+    expect(action.parentElement?.classList.contains("pl-3")).toBe(true);
+
+    expect(action.parentElement?.parentElement?.classList.contains("py-1")).toBe(true);
+
+    expect(screen.getByText(`time:${activity.created_at}`)).toBeTruthy();
   });
 });
