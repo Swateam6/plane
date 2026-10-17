@@ -305,10 +305,19 @@ class LegacyToRichFiltersConverter:
         # Determine return format
         result = {}
         if len(after_dates) == 1 and len(before_dates) == 1 and len(exact_dates) == 0:
-            # Simple range: one after and one before
-            start_date = min(after_dates[0], before_dates[0])
-            end_date = max(after_dates[0], before_dates[0])
-            self._add_rich_filter(result, field_name, "range", [start_date, end_date])
+            # Proper conversion and comparison instead of comparing text
+            start_date, end_date = sorted(
+                [
+                    dateutil_parse(after_dates[0]).date(),
+                    dateutil_parse(before_dates[0]).date(),
+                ]
+            )
+            self._add_rich_filter(
+                result,
+                field_name,
+                "range",
+                [start_date.isoformat(), end_date.isoformat()],
+            )
         elif len(exact_dates) == 1 and len(after_dates) == 0 and len(before_dates) == 0:
             # Single exact date
             self._add_rich_filter(result, field_name, "exact", exact_dates[0])
