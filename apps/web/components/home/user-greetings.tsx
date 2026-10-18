@@ -4,6 +4,7 @@
  * See the LICENSE file for details.
  */
 
+import { observer } from "mobx-react";
 // plane types
 import { useTranslation } from "@plane/i18n";
 import type { IUser } from "@plane/types";
@@ -15,7 +16,7 @@ export interface IUserGreetingsView {
   user: IUser;
 }
 
-export function UserGreetingsView(props: IUserGreetingsView) {
+export const UserGreetingsView = observer(function UserGreetingsView(props: IUserGreetingsView) {
   const { user } = props;
   // current time hook
   const { currentTime } = useCurrentTime();
@@ -58,4 +59,4 @@ export function UserGreetingsView(props: IUserGreetingsView) {
       </h5>
     </div>
   );
-}
+});
