@@ -171,6 +171,8 @@ const ISSUE_ORDERBY_KEY: Record<TIssueOrderByOptions, keyof TIssue> = {
   "-attachment_count": "attachment_count",
   sub_issues_count: "sub_issues_count",
   "-sub_issues_count": "sub_issues_count",
+  project: "project_id",
+  "-project": "project_id",
 };
 
 export abstract class BaseIssuesStore implements IBaseIssuesStore {
