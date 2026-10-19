@@ -66,4 +66,10 @@ export const ACCEPTED_ATTACHMENT_MIME_TYPES = [
   "text/xml",
   "text/csv",
   "application/xml",
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+  "application/markdown",
+  "application/csv",
+  "text/comma-separated-values",
 ];

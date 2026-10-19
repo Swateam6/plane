@@ -89,6 +89,13 @@ const detectMimeTypeFromSignature = async (file: File): Promise<string> => {
  */
 const validateAndDetectFileType = async (file: File): Promise<string> => {
   // Basic filename validation
+  // Used to check for text-based file extensions and their corresponding MIME types
+  const TEXT_EXTENSION_MIME_TYPES: Record<string, string> = {
+    csv: "text/csv",
+    md: "text/markdown",
+    markdown: "text/markdown",
+    txt: "text/plain",
+  };
   const filenameError = validateFilename(file.name);
   if (filenameError) {
     console.warn(`File validation warning: ${filenameError}`);
@@ -103,8 +110,9 @@ const validateAndDetectFileType = async (file: File): Promise<string> => {
     console.warn("Error detecting file type from signature:", _error);
   }
 
-  // fallback for unknown files
-  return "";
+  // fallback for files with no detectable signature
+  const fileExtension = file.name.split(".").pop()?.toLowerCase() || "";
+  return TEXT_EXTENSION_MIME_TYPES[fileExtension] || "";
 };
 
 /**
