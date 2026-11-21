@@ -178,8 +178,41 @@ def user_has_issue_permission(user_id, project_id, issue=None, allowed_roles=Non
 
     return qs.exists()
 
+class IssueQuerysetMixin:
+    """
+    Provides queryset methods for Issue views.
+    Subclasses can override `get_queryset` to apply additional filters.
+    """
 
-class WorkspaceIssueAPIEndpoint(BaseAPIView):
+    def get_issue_base_queryset(self):
+        return (
+            Issue.issue_objects.annotate(
+                sub_issues_count=Issue.issue_objects.filter(parent=OuterRef("id"))
+                .order_by()
+                .annotate(count=Func(F("id"), function="Count"))
+                .values("count")
+            )
+            .select_related("project")
+            .select_related("workspace")
+            .select_related("state")
+            .select_related("parent")
+            .prefetch_related("assignees")
+            .prefetch_related("labels")
+        )
+
+    def get_queryset(self):
+        # Default: filter by the kwargs every Issue view has.
+        return (
+            self.get_issue_base_queryset()
+            .filter(
+                workspace__slug=self.kwargs.get("slug"),
+                project_id=self.kwargs.get("project_id"),
+            )
+            .order_by(self.kwargs.get("order_by", "-created_at"))
+            .distinct()
+        )
+
+class WorkspaceIssueAPIEndpoint(BaseAPIView, IssueQuerysetMixin):
     """
     This viewset provides `retrieveByIssueId` on workspace level
 
@@ -196,23 +229,10 @@ class WorkspaceIssueAPIEndpoint(BaseAPIView):
         return self.kwargs.get("project_identifier", None)
 
     def get_queryset(self):
-        return (
-            Issue.issue_objects.annotate(
-                sub_issues_count=Issue.issue_objects.filter(parent=OuterRef("id"))
-                .order_by()
-                .annotate(count=Func(F("id"), function="Count"))
-                .values("count")
-            )
-            .filter(workspace__slug=self.kwargs.get("slug"))
-            .filter(project__identifier=self.kwargs.get("project_identifier"))
-            .select_related("project")
-            .select_related("workspace")
-            .select_related("state")
-            .select_related("parent")
-            .prefetch_related("assignees")
-            .prefetch_related("labels")
-            .order_by(self.kwargs.get("order_by", "-created_at"))
-        ).distinct()
+        return self.get_issue_base_queryset().filter(
+            workspace__slug=self.kwargs.get("slug"),
+            project__identifier=self.kwargs.get("project_identifier"),
+        ).order_by(self.kwargs.get("order_by", "-created_at")).distinct()
 
     @extend_schema(
         operation_id="get_workspace_work_item",
@@ -260,7 +280,7 @@ class WorkspaceIssueAPIEndpoint(BaseAPIView):
             )
 
 
-class IssueListCreateAPIEndpoint(BaseAPIView):
+class IssueListCreateAPIEndpoint(BaseAPIView, IssueQuerysetMixin):
     """
     This viewset provides `list` and `create` on issue level
     """
@@ -270,25 +290,6 @@ class IssueListCreateAPIEndpoint(BaseAPIView):
     permission_classes = [ProjectEntityPermission]
     serializer_class = IssueSerializer
     use_read_replica = True
-
-    def get_queryset(self):
-        return (
-            Issue.issue_objects.annotate(
-                sub_issues_count=Issue.issue_objects.filter(parent=OuterRef("id"))
-                .order_by()
-                .annotate(count=Func(F("id"), function="Count"))
-                .values("count")
-            )
-            .filter(project_id=self.kwargs.get("project_id"))
-            .filter(workspace__slug=self.kwargs.get("slug"))
-            .select_related("project")
-            .select_related("workspace")
-            .select_related("state")
-            .select_related("parent")
-            .prefetch_related("assignees")
-            .prefetch_related("labels")
-            .order_by(self.kwargs.get("order_by", "-created_at"))
-        ).distinct()
 
     @work_item_docs(
         operation_id="list_work_items",
@@ -314,6 +315,38 @@ class IssueListCreateAPIEndpoint(BaseAPIView):
             404: PROJECT_NOT_FOUND_RESPONSE,
         },
     )
+
+    def _apply_priority_ordering(self, queryset, order_by_param):
+        priority_order = ["urgent", "high", "medium", "low", "none"]
+        if order_by_param == "-priority":
+            priority_order = priority_order[::-1]
+        return queryset.annotate(
+            priority_order=Case(
+                *[When(priority=p, then=Value(i)) for i, p in enumerate(priority_order)],
+                output_field=CharField(),
+            )
+        ).order_by("priority_order")
+
+    def _apply_state_ordering(self, queryset, order_by_param):
+        state_order = ["backlog", "unstarted", "started", "completed", "cancelled"]
+        if order_by_param in ["-state__name", "-state__group"]:
+            state_order = state_order[::-1]
+        return queryset.annotate(
+            state_order=Case(
+                *[When(state__group=state_group, then=Value(i)) for i, state_group in enumerate(state_order)],
+                default=Value(len(state_order)),
+                output_field=CharField(),
+            )
+        ).order_by("state_order")
+
+    def _apply_assignee_label_ordering(self, queryset, order_by_param):
+        is_descending = order_by_param.startswith("-")
+        field_name = order_by_param[1::] if is_descending else order_by_param
+        order_prefix = "-" if is_descending else ""
+        return queryset.annotate(
+            max_values=Max(field_name)
+        ).order_by(f"{order_prefix}max_values")
+    
     def get(self, request, slug, project_id):
         """List work items
 
@@ -350,10 +383,6 @@ class IssueListCreateAPIEndpoint(BaseAPIView):
                 status=status.HTTP_200_OK,
             )
 
-        # Custom ordering for priority and state
-        priority_order = ["urgent", "high", "medium", "low", "none"]
-        state_order = ["backlog", "unstarted", "started", "completed", "cancelled"]
-
         # Reject any field not in the allowlist before it reaches .order_by().
         # An unrecognised value is replaced with the safe default, preventing
         # ORM order_by injection via relational traversal (GHSA-p885-6jpg-cr2p).
@@ -389,41 +418,13 @@ class IssueListCreateAPIEndpoint(BaseAPIView):
 
         total_issue_queryset = Issue.issue_objects.filter(project_id=project_id, workspace__slug=slug)
 
-        # Priority Ordering
-        if order_by_param == "priority" or order_by_param == "-priority":
-            priority_order = priority_order if order_by_param == "priority" else priority_order[::-1]
-            issue_queryset = issue_queryset.annotate(
-                priority_order=Case(
-                    *[When(priority=p, then=Value(i)) for i, p in enumerate(priority_order)],
-                    output_field=CharField(),
-                )
-            ).order_by("priority_order")
-
-        # State Ordering
-        elif order_by_param in [
-            "state__name",
-            "state__group",
-            "-state__name",
-            "-state__group",
-        ]:
-            state_order = state_order if order_by_param in ["state__name", "state__group"] else state_order[::-1]
-            issue_queryset = issue_queryset.annotate(
-                state_order=Case(
-                    *[When(state__group=state_group, then=Value(i)) for i, state_group in enumerate(state_order)],
-                    default=Value(len(state_order)),
-                    output_field=CharField(),
-                )
-            ).order_by("state_order")
-        # assignee and label ordering
-        elif order_by_param in [
-            "labels__name",
-            "-labels__name",
-            "assignees__first_name",
-            "-assignees__first_name",
-        ]:
-            issue_queryset = issue_queryset.annotate(
-                max_values=Max(order_by_param[1::] if order_by_param.startswith("-") else order_by_param)
-            ).order_by("-max_values" if order_by_param.startswith("-") else "max_values")
+        # apply custom ordering based on the order_by_param
+        if order_by_param in ["priority", "-priority"]:
+            issue_queryset = self._apply_priority_ordering(issue_queryset, order_by_param)
+        elif order_by_param in ["state__name", "state__group", "-state__name", "-state__group"]:
+            issue_queryset = self._apply_state_ordering(issue_queryset, order_by_param)
+        elif order_by_param in ["labels__name", "-labels__name", "assignees__first_name", "-assignees__first_name"]:
+            issue_queryset = self._apply_assignee_label_ordering(issue_queryset, order_by_param)
         else:
             issue_queryset = issue_queryset.order_by(order_by_param)
 
@@ -529,7 +530,7 @@ class IssueListCreateAPIEndpoint(BaseAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class IssueDetailAPIEndpoint(BaseAPIView):
+class IssueDetailAPIEndpoint(BaseAPIView, IssueQuerysetMixin):
     """Issue Detail Endpoint"""
 
     model = Issue
@@ -537,25 +538,6 @@ class IssueDetailAPIEndpoint(BaseAPIView):
     permission_classes = [ProjectEntityPermission]
     serializer_class = IssueSerializer
     use_read_replica = True
-
-    def get_queryset(self):
-        return (
-            Issue.issue_objects.annotate(
-                sub_issues_count=Issue.issue_objects.filter(parent=OuterRef("id"))
-                .order_by()
-                .annotate(count=Func(F("id"), function="Count"))
-                .values("count")
-            )
-            .filter(project_id=self.kwargs.get("project_id"))
-            .filter(workspace__slug=self.kwargs.get("slug"))
-            .select_related("project")
-            .select_related("workspace")
-            .select_related("state")
-            .select_related("parent")
-            .prefetch_related("assignees")
-            .prefetch_related("labels")
-            .order_by(self.kwargs.get("order_by", "-created_at"))
-        ).distinct()
 
     @work_item_docs(
         operation_id="retrieve_work_item",
@@ -586,12 +568,7 @@ class IssueDetailAPIEndpoint(BaseAPIView):
         Supports filtering, ordering, and field selection through query parameters.
         """
 
-        issue = Issue.issue_objects.annotate(
-            sub_issues_count=Issue.issue_objects.filter(parent=OuterRef("id"))
-            .order_by()
-            .annotate(count=Func(F("id"), function="Count"))
-            .values("count")
-        ).get(workspace__slug=slug, project_id=project_id, pk=pk)
+        issue = self.get_queryset().get(pk=pk)
         return Response(
             IssueSerializer(issue, fields=self.fields, expand=self.expand).data,
             status=status.HTTP_200_OK,
@@ -1895,6 +1872,80 @@ class IssueAttachmentListCreateAPIEndpoint(BaseAPIView):
             ),
         },
     )
+
+    
+    def _parse_and_validate_attachment_input(self, request):
+        """Parses and validates attachment input (name, type, size)."""
+        name = sanitize_filename(request.data.get("name"))
+        file_type = request.data.get("type", False)
+        
+        # Clients may send size as a numeric string ("53314").
+        # 1e400 parses as inf (OverflowError). Non-positive values must not
+        # reach the S3 content-length-range, which is [1, size].
+        try:
+            size = int(request.data.get("size") or 0)
+        except (TypeError, ValueError, OverflowError):
+            size = 0
+
+        if not name or size <= 0:
+            return None, None, None, {"error": "Invalid request.", "status": False}
+            
+        if not file_type or file_type not in settings.ATTACHMENT_MIME_TYPES:
+            return None, None, None, {"error": "Invalid file type.", "status": False}
+
+        size_limit = min(size, settings.FILE_SIZE_LIMIT)
+        return name, file_type, size_limit, None
+
+    def _check_duplicate_attachment(self, request, project_id, slug, issue_id):
+        """Checks for an existing attachment with the same external_id/source."""
+        external_id = request.data.get("external_id")
+        external_source = request.data.get("external_source")
+        
+        if external_id and external_source:
+            asset = FileAsset.objects.filter(
+                project_id=project_id,
+                workspace__slug=slug,
+                external_source=external_source,
+                external_id=external_id,
+                issue_id=issue_id,
+                entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
+            ).first()
+            if asset:
+                return {
+                    "error": "Issue with the same external id and external source already exists",
+                    "id": str(asset.id),
+                }
+        return None
+
+    def _create_attachment_and_get_presigned_data(self, request, workspace, project_id, issue_id, name, file_type, size_limit):
+        """Creates the FileAsset and generates the S3 presigned URL."""
+        asset_key = f"{workspace.id}/{uuid.uuid4().hex}-{name}"
+
+        asset = FileAsset.objects.create(
+            attributes={"name": name, "type": file_type, "size": size_limit},
+            asset=asset_key,
+            size=size_limit,
+            workspace_id=workspace.id,
+            created_by=request.user,
+            issue_id=issue_id,
+            project_id=project_id,
+            entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
+            external_id=request.data.get("external_id"),
+            external_source=request.data.get("external_source"),
+        )
+
+        storage = S3Storage(request=request)
+        presigned_url = storage.generate_presigned_post(
+            object_name=asset_key, file_type=file_type, file_size=size_limit
+        )
+        
+        return {
+            "upload_data": presigned_url,
+            "asset_id": str(asset.id),
+            "attachment": IssueAttachmentSerializer(asset).data,
+            "asset_url": asset.asset_url,
+        }
+    
     def post(self, request, slug, project_id, issue_id):
         """Create work item attachment
 
@@ -1915,95 +1966,17 @@ class IssueAttachmentListCreateAPIEndpoint(BaseAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        name = sanitize_filename(request.data.get("name"))
-        type = request.data.get("type", False)
-        # Clients may send size as a numeric string ("53314").
-        # 1e400 parses as inf (OverflowError). Non-positive values must not
-        # reach the S3 content-length-range, which is [1, size].
-        try:
-            size = int(request.data.get("size") or 0)
-        except (TypeError, ValueError, OverflowError):
-            size = 0
-        external_id = request.data.get("external_id")
-        external_source = request.data.get("external_source")
+        name, file_type, size_limit, error_response = self._parse_and_validate_attachment_input(request)
+        if error_response:
+            return Response(error_response, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check if the request is valid
-        if not name or size <= 0:
-            return Response(
-                {"error": "Invalid request.", "status": False},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        duplicate_error = self._check_duplicate_attachment(request, slug, project_id, issue_id)
+        if duplicate_error:
+            return Response(duplicate_error, status=status.HTTP_409_CONFLICT)
 
-        size_limit = min(size, settings.FILE_SIZE_LIMIT)
-
-        if not type or type not in settings.ATTACHMENT_MIME_TYPES:
-            return Response(
-                {"error": "Invalid file type.", "status": False},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Get the workspace
         workspace = Workspace.objects.get(slug=slug)
-
-        # asset key
-        asset_key = f"{workspace.id}/{uuid.uuid4().hex}-{name}"
-
-        if (
-            request.data.get("external_id")
-            and request.data.get("external_source")
-            and FileAsset.objects.filter(
-                project_id=project_id,
-                workspace__slug=slug,
-                external_source=request.data.get("external_source"),
-                external_id=request.data.get("external_id"),
-                issue_id=issue_id,
-                entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
-            ).exists()
-        ):
-            asset = FileAsset.objects.filter(
-                project_id=project_id,
-                workspace__slug=slug,
-                external_source=request.data.get("external_source"),
-                external_id=request.data.get("external_id"),
-                issue_id=issue_id,
-                entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
-            ).first()
-            return Response(
-                {
-                    "error": "Issue with the same external id and external source already exists",
-                    "id": str(asset.id),
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        # Create a File Asset
-        asset = FileAsset.objects.create(
-            attributes={"name": name, "type": type, "size": size_limit},
-            asset=asset_key,
-            size=size_limit,
-            workspace_id=workspace.id,
-            created_by=request.user,
-            issue_id=issue_id,
-            project_id=project_id,
-            entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
-            external_id=external_id,
-            external_source=external_source,
-        )
-
-        # Get the presigned URL
-        storage = S3Storage(request=request)
-        # Generate a presigned URL to share an S3 object
-        presigned_url = storage.generate_presigned_post(object_name=asset_key, file_type=type, file_size=size_limit)
-        # Return the presigned URL
-        return Response(
-            {
-                "upload_data": presigned_url,
-                "asset_id": str(asset.id),
-                "attachment": IssueAttachmentSerializer(asset).data,
-                "asset_url": asset.asset_url,
-            },
-            status=status.HTTP_200_OK,
-        )
+        response_data = self._create_attachment_and_get_presigned_data(request, workspace, project_id, issue_id, name, file_type, size_limit)
+        return Response(response_data, status=status.HTTP_200_OK)
 
     @issue_attachment_docs(
         operation_id="list_work_item_attachments",
@@ -2391,6 +2364,48 @@ class IssueRelationListCreateAPIEndpoint(BaseAPIView):
             404: ISSUE_NOT_FOUND_RESPONSE,
         },
     )
+
+    def _process_relation(rel, issue_id, response_data, seen_duplicate, seen_relates_to):
+        """
+        Helper to process a single relation and update the response_data dict.
+        """
+        rel_issue_id = str(rel["issue_id"])
+        rel_related_issue_id = str(rel["related_issue_id"])
+        
+        issue_project = {"project_id": str(rel["issue_project_id"]), "issue_id": rel_issue_id}
+        related_project = {"project_id": str(rel["related_issue_project_id"]), "issue_id": rel_related_issue_id}
+
+        def handle_standard(forward_key, reverse_key):
+            """Handles types that just append based on direction (no deduplication)."""
+            if rel_related_issue_id == issue_id:
+                response_data[forward_key].append(issue_project)
+            if rel_issue_id == issue_id:
+                response_data[reverse_key].append(related_project)
+
+        def handle_deduplicated(target_key, seen_set):
+            """Handles types that require deduplication (duplicate, relates_to)."""
+            if rel_issue_id == issue_id and rel["related_issue_id"] not in seen_set:
+                seen_set.add(rel["related_issue_id"])
+                response_data[target_key].append(related_project)
+            if rel_related_issue_id == issue_id and rel["issue_id"] not in seen_set:
+                seen_set.add(rel["issue_id"])
+                response_data[target_key].append(issue_project)
+
+        # Dispatch map: relation_type -> handler callable
+        handlers = {
+            "blocked_by": lambda: handle_standard("blocking", "blocked_by"),
+            "start_before": lambda: handle_standard("start_after", "start_before"),
+            "finish_before": lambda: handle_standard("finish_after", "finish_before"),
+            "duplicate": lambda: handle_deduplicated("duplicate", seen_duplicate),
+            "relates_to": lambda: handle_deduplicated("relates_to", seen_relates_to),
+        }
+
+        rt = rel["relation_type"]
+        handler = handlers.get(rt)
+        if handler:
+            handler()
+        
+            
     def get(self, request, slug, project_id, issue_id):
         """List work item relations
 
@@ -2422,57 +2437,7 @@ class IssueRelationListCreateAPIEndpoint(BaseAPIView):
         seen_relates_to = set()
 
         for rel in relations:
-            rt = rel["relation_type"]
-            if rt == "blocked_by":
-                if str(rel["related_issue_id"]) == str(issue_id):
-                    response_data["blocking"].append(
-                        {"project_id": str(rel["issue_project_id"]), "issue_id": str(rel["issue_id"])}
-                    )
-                if str(rel["issue_id"]) == str(issue_id):
-                    response_data["blocked_by"].append(
-                        {"project_id": str(rel["related_issue_project_id"]), "issue_id": str(rel["related_issue_id"])}
-                    )
-            elif rt == "duplicate":
-                if str(rel["issue_id"]) == str(issue_id) and rel["related_issue_id"] not in seen_duplicate:
-                    seen_duplicate.add(rel["related_issue_id"])
-                    response_data["duplicate"].append(
-                        {"project_id": str(rel["related_issue_project_id"]), "issue_id": str(rel["related_issue_id"])}
-                    )
-                if str(rel["related_issue_id"]) == str(issue_id) and rel["issue_id"] not in seen_duplicate:
-                    seen_duplicate.add(rel["issue_id"])
-                    response_data["duplicate"].append(
-                        {"project_id": str(rel["issue_project_id"]), "issue_id": str(rel["issue_id"])}
-                    )
-            elif rt == "relates_to":
-                if str(rel["issue_id"]) == str(issue_id) and rel["related_issue_id"] not in seen_relates_to:
-                    seen_relates_to.add(rel["related_issue_id"])
-                    response_data["relates_to"].append(
-                        {"project_id": str(rel["related_issue_project_id"]), "issue_id": str(rel["related_issue_id"])}
-                    )
-                if str(rel["related_issue_id"]) == str(issue_id) and rel["issue_id"] not in seen_relates_to:
-                    seen_relates_to.add(rel["issue_id"])
-                    response_data["relates_to"].append(
-                        {"project_id": str(rel["issue_project_id"]), "issue_id": str(rel["issue_id"])}
-                    )
-            elif rt == "start_before":
-                if str(rel["related_issue_id"]) == str(issue_id):
-                    response_data["start_after"].append(
-                        {"project_id": str(rel["issue_project_id"]), "issue_id": str(rel["issue_id"])}
-                    )
-                if str(rel["issue_id"]) == str(issue_id):
-                    response_data["start_before"].append(
-                        {"project_id": str(rel["related_issue_project_id"]), "issue_id": str(rel["related_issue_id"])}
-                    )
-            elif rt == "finish_before":
-                if str(rel["related_issue_id"]) == str(issue_id):
-                    response_data["finish_after"].append(
-                        {"project_id": str(rel["issue_project_id"]), "issue_id": str(rel["issue_id"])}
-                    )
-                if str(rel["issue_id"]) == str(issue_id):
-                    response_data["finish_before"].append(
-                        {"project_id": str(rel["related_issue_project_id"]), "issue_id": str(rel["related_issue_id"])}
-                    )
-
+            self._process_relation(rel, issue_id, response_data, seen_duplicate, seen_relates_to)
         return Response(response_data, status=status.HTTP_200_OK)
 
     @work_item_relation_docs(
