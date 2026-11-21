@@ -1,4 +1,3 @@
-// oxlint-disable no-shadow
 /**
  * Copyright (c) 2023-present Plane Software, Inc. and contributors
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -93,7 +92,6 @@ export type IssueUpdates = {
 };
 
 export const isWorkspaceLevel = (type: EIssuesStoreType) =>
-  // oxlint-disable-next-line no-unneeded-ternary
   [
     EIssuesStoreType.PROFILE,
     EIssuesStoreType.GLOBAL,
@@ -101,9 +99,7 @@ export const isWorkspaceLevel = (type: EIssuesStoreType) =>
     EIssuesStoreType.TEAM_VIEW,
     EIssuesStoreType.TEAM_PROJECT_WORK_ITEMS,
     EIssuesStoreType.WORKSPACE_DRAFT,
-  ].includes(type)
-    ? true
-    : false;
+  ].includes(type);
 
 type TGetGroupByColumns = {
   groupBy: GroupByColumnTypes | null;
@@ -119,12 +115,13 @@ type TGetGroupByColumns = {
 export const getGroupByColumns = ({
   groupBy,
   includeNone,
-  isWorkspaceLevel,
+  isWorkspaceLevel: workspaceLevel,
   isEpic = false,
   projectId,
 }: TGetGroupByColumns): IGroupByColumn[] | undefined => {
   // If no groupBy is specified and includeNone is true, return "All Issues" group
-  if (!groupBy && includeNone) {
+  if (!groupBy) {
+    if (!includeNone) return undefined;
     return [
       {
         id: "All Issues",
@@ -134,9 +131,6 @@ export const getGroupByColumns = ({
       },
     ];
   }
-
-  // Return undefined if no valid groupBy
-  if (!groupBy) return undefined;
 
   // Map of group by options to their corresponding column getter functions
   const groupByColumnMap: Record<
@@ -156,7 +150,7 @@ export const getGroupByColumns = ({
   };
 
   // Get and return the columns for the specified group by option
-  return groupByColumnMap[groupBy]?.({ isWorkspaceLevel, projectId });
+  return groupByColumnMap[groupBy]?.({ isWorkspaceLevel: workspaceLevel, projectId });
 };
 
 const getProjectColumns = (): IGroupByColumn[] | undefined => {
@@ -282,11 +276,11 @@ const getPriorityColumns = (): IGroupByColumn[] => {
   }));
 };
 
-const getLabelsColumns = ({ isWorkspaceLevel }: TGetColumns): IGroupByColumn[] => {
+const getLabelsColumns = ({ isWorkspaceLevel: workspaceLevel }: TGetColumns): IGroupByColumn[] => {
   const { workspaceLabels, projectLabels } = store.label;
   // map labels to group by columns
   const labels = [
-    ...(isWorkspaceLevel ? workspaceLabels || [] : projectLabels || []),
+    ...(workspaceLevel ? workspaceLabels || [] : projectLabels || []),
     { id: "None", name: "None", color: "#666" },
   ];
   // map labels to group by columns
@@ -300,14 +294,15 @@ const getLabelsColumns = ({ isWorkspaceLevel }: TGetColumns): IGroupByColumn[] =
   }));
 };
 
-const getAssigneeColumns = ({ isWorkspaceLevel, projectId }: TGetColumns): IGroupByColumn[] | undefined => {
+const getAssigneeColumns = ({
+  isWorkspaceLevel: workspaceLevel,
+  projectId,
+}: TGetColumns): IGroupByColumn[] | undefined => {
   // store values
   const { getUserDetails } = store.memberRoot;
   // derived values
-  const { memberIds, includeNone } = getScopeMemberIds({ isWorkspaceLevel, projectId });
+  const { memberIds, includeNone } = getScopeMemberIds({ isWorkspaceLevel: workspaceLevel, projectId });
   const assigneeColumns: IGroupByColumn[] = [];
-
-  if (!memberIds) return [];
 
   memberIds.forEach((memberId) => {
     const member = getUserDetails(memberId);
@@ -402,7 +397,7 @@ export const getSourceFromDropPayload = (payload: IPragmaticDropPayload): GroupD
   const { location, source: sourceIssue } = payload;
 
   const sourceIssueData = sourceIssue.data;
-  let sourceColumData;
+  let sourceColumnData;
 
   const sourceDropTargets = location?.initial?.dropTargets ?? [];
   for (const dropTarget of sourceDropTargets) {
@@ -411,16 +406,16 @@ export const getSourceFromDropPayload = (payload: IPragmaticDropPayload): GroupD
     if (!dropTargetData) continue;
 
     if (dropTargetData.type === "COLUMN") {
-      sourceColumData = dropTargetData;
+      sourceColumnData = dropTargetData;
     }
   }
 
-  if (sourceIssueData?.id === undefined || !sourceColumData?.groupId) return;
+  if (sourceIssueData?.id === undefined || !sourceColumnData?.groupId) return;
 
   return {
-    groupId: sourceColumData.groupId as string,
-    subGroupId: sourceColumData.subGroupId as string,
-    columnId: sourceColumData.columnId as string,
+    groupId: sourceColumnData.groupId as string,
+    subGroupId: sourceColumnData.subGroupId as string,
+    columnId: sourceColumnData.columnId as string,
     id: sourceIssueData.id as string,
   };
 };
@@ -497,22 +492,18 @@ const handleSortOrder = (
 
   if (destinationIssues && destinationIssues.length > 0) {
     if (destinationIndex === 0) {
-      const destinationIssueId = destinationIssues[0];
-      const destinationIssue = getIssueById(destinationIssueId);
-      if (!destinationIssue) return currentIssueState;
-
+      const firstIssue = getIssueById(destinationIssues[0]);
+      if (!firstIssue) return currentIssueState;
       currentIssueState = {
         ...currentIssueState,
-        sort_order: destinationIssue.sort_order - sortOrderDefaultValue,
+        sort_order: firstIssue.sort_order - sortOrderDefaultValue,
       };
     } else if (destinationIndex === destinationIssues.length) {
-      const destinationIssueId = destinationIssues[destinationIssues.length - 1];
-      const destinationIssue = getIssueById(destinationIssueId);
-      if (!destinationIssue) return currentIssueState;
-
+      const lastIssue = getIssueById(destinationIssues[destinationIssues.length - 1]);
+      if (!lastIssue) return currentIssueState;
       currentIssueState = {
         ...currentIssueState,
-        sort_order: destinationIssue.sort_order + sortOrderDefaultValue,
+        sort_order: lastIssue.sort_order + sortOrderDefaultValue,
       };
     } else {
       const destinationTopIssueId = destinationIssues[destinationIndex - 1];
@@ -776,7 +767,7 @@ export const isDisplayFiltersApplied = (filters: Partial<IIssueFilters>): boolea
     (key) => !filters.displayProperties?.[key as keyof IIssueDisplayProperties]
   );
 
-  const isDisplayFiltersApplied = Object.keys(filters.displayFilters ?? {}).some((key) => {
+  const displayFiltersApplied = Object.keys(filters.displayFilters ?? {}).some((key) => {
     const value = filters.displayFilters?.[key as keyof IIssueDisplayFilterOptions];
     if (!value) return false;
     // -create_at is the default order
@@ -786,7 +777,7 @@ export const isDisplayFiltersApplied = (filters: Partial<IIssueFilters>): boolea
     return true;
   });
 
-  return isDisplayPropertiesApplied || isDisplayFiltersApplied;
+  return isDisplayPropertiesApplied || displayFiltersApplied;
 };
 
 /**
@@ -820,14 +811,17 @@ export type TGetScopeMemberIdsResult = {
   includeNone: boolean;
 };
 
-export const getScopeMemberIds = ({ isWorkspaceLevel, projectId }: TGetColumns): TGetScopeMemberIdsResult => {
+export const getScopeMemberIds = ({
+  isWorkspaceLevel: workspaceLevel,
+  projectId,
+}: TGetColumns): TGetScopeMemberIdsResult => {
   // store values
   const { workspaceMemberIds } = store.memberRoot.workspace;
   const { projectMemberIds } = store.memberRoot.project;
   // derived values
   const memberIds = workspaceMemberIds;
 
-  if (isWorkspaceLevel) {
+  if (workspaceLevel) {
     return { memberIds: memberIds ?? [], includeNone: true };
   }
 
